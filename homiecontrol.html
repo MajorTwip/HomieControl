@@ -24,7 +24,7 @@
         <div class="form-row">
           <div class="form-group col-md-6">
             <label for="server_url">MQTT Server</label>
-            <input type="url" class="form-control" id="server_url" placeholder="example.com">
+            <input type="url" class="form-control" id="server_url" placeholder="example.com" value="mqtt.comstock.ch">
           </div>
           <div class="form-group col-md-2">
             <label for="server_port">Port</label>
@@ -32,38 +32,52 @@
           </div>
           <div class="form-group col-md-4">
             <label for="base_topic">Homie Basetopic</label>
-            <input type="url" class="form-control" id="base_topic" value="homie/">
+            <input type="url" class="form-control" id="base_topic" value="csh/">
           </div>
           <div class="form-group col-md-4">
-              <input type="button" class="form-control" id="srv_connect" value="Connect" onclick="srv_connect()">
-            </div>
+            <input type="button" class="form-control" id="srv_connect" value="Connect">
+          </div>
         </div>
       </div>
     </div>
 
     <div class="panel panel-info">
-        <div class="panel-heading">
-          <div class="panel-title">Firmware</div>
-        </div>
-        <div class="panel-body">
-          <div class="form-row">
-            <div class="form-group col-md-6">
-              <label for="file_path">MQTT Server</label>
-              <input type="file" class="form-control" id="file_path" placeholder="firmware.bin" onchange="firmwareselected()">
+      <div class="panel-heading">
+        <div class="panel-title">Firmware</div>
+      </div>
+      <div class="panel-body">
+        <div class="form-row">
+          <div class="form-group col-md-6">
+            <label for="file_path">MQTT Server</label>
+            <input type="file" class="form-control" id="file_path" placeholder="firmware.bin"
+              onchange="firmwareselected()">
+          </div>
+          <div class="form-group col-md-6">
+            <div class="form-group">
+              <label for="fw_md5">MD5 Hash</label>
+              <input type="text" readonly class="form-control" id="fw_md5" placeholder="NA">
             </div>
-            <div class="form-group col-md-6">
-                <div class="form-group">
-                    <label for="fw_md5">MD5 Hash</label>
-                    <input type="text" readonly class="form-control" id="fw_md5" placeholder="NA">
-                </div>
-                <div class="form-group">
-                    <label for="fw_name">Fw Name (for HomieESP)</label>
-                    <input type="text" readonly class="form-control" id="fw_name" placeholder="NA">
-                </div>
+            <div class="form-group">
+              <label for="fw_name">Fw Name (for HomieESP)</label>
+              <input type="text" readonly class="form-control" id="fw_name" placeholder="NA">
             </div>
           </div>
         </div>
       </div>
+    </div>
+
+    <div id="deviceslist" class="row"></div>
+    <div class="panel panel-info col-md-4 homiedevice invisible" id="homiedevice_template">
+      <div class="panel-heading">
+        <div class="panel-title device-name">HomieDev1</div>
+      </div>
+      <div class="panel-body device-info">
+          <div id="info_template"><label class="info_label">Version</label><input type="text" readonly class="form-control info_text" placeholder="NA"></div>
+      </div>
+      <div class="panel-footer">
+          <input type="button" class="form-control update-button" value="Update">
+      </div>
+    </div>
 
 
 
@@ -83,65 +97,150 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
 
   <script>
+    $("#srv_connect").bind("click", srv_connect);
+
+
     var fw;
     var fw_md5;
 
     var mqtt;
     var mqtt_reconnect = 2000;
 
-    function getMD5(){
+    var devices = new Map();
+    var deviceinfos = new Map();
+    deviceinfos.set("/$fw/version", "FW-Version");
+    deviceinfos.set("/$name", "Name");
+    deviceinfos.set("/$fw/name", "FW-Name");
+    deviceinfos.set("/$state","State");
+
+
+    function getMD5() {
       let md5_field = document.getElementById("fw_md5");
       let hash = CryptoJS.MD5(CryptoJS.enc.Latin1.parse(fw));
       fw_md5 = hash.toString(CryptoJS.enc.Hex);
       $(md5_field).val(fw_md5);
     }
 
-    function getFwName(){
+    function getFwName() {
       let fwNameMBprefix = String.fromCharCode(0xBF, 0x84, 0xE4, 0x13, 0x54);
       let fwNameMBpostfix = String.fromCharCode(0x93, 0x44, 0x6B, 0xA7, 0x75);
-      let fw_namestr = fw.substring(fw.indexOf(fwNameMBprefix)+fwNameMBprefix.length,fw.indexOf(fwNameMBpostfix));
+      let fw_namestr = fw.substring(fw.indexOf(fwNameMBprefix) + fwNameMBprefix.length, fw.indexOf(fwNameMBpostfix));
       $("#fw_name").val(fw_namestr);
       console.log(fw_namestr);
     }
 
-    function firmwareselected(){
+    function firmwareselected() {
       console.log("Firmware selected");
       let fw_select = document.getElementById("file_path").files[0];
       console.log(fw_select);
       let reader = new FileReader();
 
       reader.addEventListener(
-            'load',
-            function () {
-                fw = this.result;
-                getMD5();
-                getFwName();
-            }
-        );
+        'load',
+        function () {
+          fw = this.result;
+          getMD5();
+          getFwName();
+        }
+      );
       reader.readAsBinaryString(fw_select);
     }
 
-    function onConnect(){
+    function onConnect() {
       console.log("connected");
-      $(".srv_connect").text("Disconnect");
-      $(".srv_connect").off("click");
-      $(".srv_connect").addEventListener("click", srv_disconnect);
+      $("#srv_connect").val("Disconnect");
+      $("#srv_connect").unbind();
+      $("#srv_connect").bind("click", srv_disconnect);
+
+      let topic = $("#base_topic").val().trim();
+      if (topic.slice(-1) != '/') {
+        topic = topic + "/"
+      };
+      topic = topic + "+";
+      deviceinfos.forEach(function (val, top) {
+        console.log("Subscribe to " + topic + top);
+        mqtt.subscribe(topic + top);
+      });
+
     }
 
-    function srv_disconnect(){
+    function srv_disconnect() {
       mqtt.disconnect();
-      console.log("connected");
-      $(".srv_connect").text("Connect");
+      console.log("disconnected");
+      $("#srv_connect").val("Connect");
+      $("#srv_connect").unbind();
+      $("#srv_connect").bind("click", srv_connect);
     }
 
-    function srv_connect(){
-      mqtt = new Paho.MQTT.Client($("#server_url").val(),parseInt($("#server_port").val()),"HomieControl");
+    function srv_connect() {
+      mqtt = new Paho.MQTT.Client($("#server_url").val(), parseInt($("#server_port").val()), "HomieControl");
+      mqtt.onConnectionLost = onConnectionLost;
+      mqtt.onMessageArrived = onMessageArrived;
       var options = {
         timeout: 3,
         onSuccess: onConnect,
       };
       mqtt.connect(options);
     }
+
+    function onConnectionLost(responseObject) {
+      if (responseObject.errorCode !== 0) {
+        console.log("onConnectionLost:" + responseObject.errorMessage);
+      }
+    }
+
+    function onMessageArrived(message) {
+      let dest = message.destinationName;
+      let device_id = dest.split('/')[1];
+      let sub = dest.slice(dest.indexOf(device_id) + device_id.length);
+      if (!devices.has(device_id)) {
+        let device = new Map();
+        device.set(deviceinfos.get(sub), message.payloadString);
+        devices.set(device_id, device);
+      } else {
+        let device = devices.get(device_id);
+        device.set(deviceinfos.get(sub), message.payloadString);
+        devices.set(device_id, device);
+      }
+      console.log(devices);
+      updateDevice(device_id);
+
+    }
+
+    function updateDevice(device_id) {
+      let device=devices.get(device_id);
+      let $devicepanel = $("#" + device_id + "_panel");
+      if ($devicepanel.length == 0) {
+        let $template = $("#homiedevice_template").clone();
+        $template.attr("id",device_id+"_panel");
+        $template.removeClass("invisible");
+        $template.find(".device-info").text(""); 
+        $template.appendTo($("#deviceslist"));
+        $devicepanel = $template;
+      }
+      device.forEach(function(val,key){
+        if(key=="Name"){
+        $devicepanel.find(".device-name").text(device.get("Name"));
+      }else{
+        $deviceinfo = $devicepanel.find(".device-info");
+        $infoline = $deviceinfo.find("#"+device_id + key);
+        if($infoline.length==0){
+          console.log("Add line " + key + " to " + device_id);
+          $infoline=$("#info_template").clone();
+          $infoline.attr("id",device_id+key)
+          $infoline.appendTo($deviceinfo);
+        }
+        $infoline.find(".info_label").text(key);
+        $infoline.find(".info_text").val(val);
+      }
+      });
+      $devicepanel.find(".update-button").bind("click",updateFw);
+    }
+
+    function updateFw(device_id){
+      console.log("Update " + device_id);
+    }
+
   </script>
 </body>
 
