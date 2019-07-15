@@ -69,12 +69,13 @@
     <div id="deviceslist" class="row"></div>
     <div class="panel panel-info col-md-4 homiedevice invisible" id="homiedevice_template">
       <div class="panel-heading">
-        <div class="panel-title device-name">HomieDev1</div>
+        <div class="panel-title device-name">HomieDevice</div>
       </div>
       <div class="panel-body device-info">
           <div id="info_template"><label class="info_label">Version</label><input type="text" readonly class="form-control info_text" placeholder="NA"></div>
       </div>
-      <div class="panel-footer">
+      <div class="panel-footer device-ota">
+          <div class="device-ota-status progress-bar progress-bar-striped progress-bar-animated invisible" role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">fd</div>
           <input type="button" class="form-control update-button" value="Update">
       </div>
     </div>
@@ -105,6 +106,7 @@
 
     var mqtt;
     var mqtt_reconnect = 2000;
+    var basetopic;
 
     var devices = new Map();
     var deviceinfos = new Map();
@@ -112,6 +114,8 @@
     deviceinfos.set("/$name", "Name");
     deviceinfos.set("/$fw/name", "FW-Name");
     deviceinfos.set("/$state","State");
+    deviceinfos.set("/$implementation/ota/enabled", "OTA-Enabled");
+    deviceinfos.set("/$implementation/ota/status", "OTA-Status");
 
 
     function getMD5() {
@@ -152,11 +156,11 @@
       $("#srv_connect").unbind();
       $("#srv_connect").bind("click", srv_disconnect);
 
-      let topic = $("#base_topic").val().trim();
-      if (topic.slice(-1) != '/') {
-        topic = topic + "/"
+      basetopic = $("#base_topic").val().trim();
+      if (basetopic.slice(-1) != '/') {
+        basetopic = basetopic + "/"
       };
-      topic = topic + "+";
+      let topic = basetopic + "+";
       deviceinfos.forEach(function (val, top) {
         console.log("Subscribe to " + topic + top);
         mqtt.subscribe(topic + top);
@@ -175,6 +179,7 @@
     function srv_connect() {
       mqtt = new Paho.MQTT.Client($("#server_url").val(), parseInt($("#server_port").val()), "HomieControl");
       mqtt.onConnectionLost = onConnectionLost;
+      mqtt.onFailure = onFailure;
       mqtt.onMessageArrived = onMessageArrived;
       var options = {
         timeout: 3,
@@ -187,6 +192,12 @@
       if (responseObject.errorCode !== 0) {
         console.log("onConnectionLost:" + responseObject.errorMessage);
       }
+      timeout(srv_connect,mqtt_reconnect);
+    }
+
+    function onFailure(message){
+      console.log("Connection attempt failed: " + message);
+      timeout(srv_connect,mqtt_reconnect);
     }
 
     function onMessageArrived(message) {
@@ -202,8 +213,13 @@
         device.set(deviceinfos.get(sub), message.payloadString);
         devices.set(device_id, device);
       }
-      console.log(devices);
-      updateDevice(device_id);
+      //console.log(devices);
+      if(sub=="/$implementation/ota/status"){
+        progressOTA(device_id);
+      }
+      else{
+        updateDevice(device_id);
+      }
 
     }
 
@@ -234,11 +250,65 @@
         $infoline.find(".info_text").val(val);
       }
       });
-      $devicepanel.find(".update-button").bind("click",updateFw);
+      if(device.has("OTA-Enabled")){
+        if(device.get("OTA-Enabled")=="true"){
+          $devicepanel.find(".update-button").attr("value","Update").unbind().bind("click",function(){updateFw(device_id);});
+        }else{
+          $devicepanel.find(".update-button").unbind().attr("value","OTA disabled");
+        }
+      }else{
+        $devicepanel.find(".update-button").unbind().attr("value","OTA not available");
+      }
     }
 
     function updateFw(device_id){
       console.log("Update " + device_id);
+      let $devicefooter = $("#" + device_id + "_panel>.device-ota");
+      $devicefooter.find(".update-button").addClass("invisible");
+
+      let message = new Paho.MQTT.Message(btoa(fw));
+      message.destinationName = String(basetopic + device_id + "/$implementation/ota/firmware/" + fw_md5);
+      $devicefooter.find(".device-ota-status").removeClass("invisible");
+      console.log(message);
+      mqtt.send(message);
+    }
+
+    function progressOTA(device_id){
+      let $devicefooter = $("#" + device_id + "_panel>.device-ota");
+      let $bar = $devicefooter.find(".device-ota-status");
+      let state = devices.get(device_id).get("OTA-Status");
+      let statecode = state.split(" ")[0];
+      let stateinfo = state.split(" ")[1];
+      console.log("code: " + statecode + "  info: " + stateinfo);
+      switch(statecode.trim()){
+        case "400":
+        $bar.text("Invalid FW");
+        $bar.addClass("progress-bar-danger");
+        $bar.attr("style","");
+        $devicefooter.find(".update-button").removeClass("invisible");
+        break;
+
+        case "206":
+        let percent = stateinfo.split("/")[0] / stateinfo.split("/")[1] * 100;
+        $bar.attr("style","width:"+ percent +"%");
+        $bar.addClass("progress-bar-info").removeClass("progress-bar-danger");
+        $bar.text(stateinfo);
+        break;
+
+        case "200":
+        $bar.text("Update successful");
+        $bar.addClass("progress-bar-success").removeClass("progress-bar-danger");
+        $bar.attr("style","");
+        $devicefooter.find(".update-button").removeClass("invisible");
+        break;
+
+        default:
+        $bar.text(state);
+        $devicefooter.find(".update-button").removeClass("invisible");
+        $bar.attr("style","");
+
+
+      }
     }
 
   </script>
