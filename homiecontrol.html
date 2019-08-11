@@ -47,10 +47,13 @@
       </div>
       <div class="panel-body">
         <div class="form-row">
-          <div class="form-group col-md-6">
+          <div class="form-group col-md-5">
             <label for="file_path">MQTT Server</label>
-            <input type="file" class="form-control" id="file_path" placeholder="firmware.bin"
-              onchange="firmwareselected()">
+            <input type="file" class="form-control" id="file_path" placeholder="firmware.bin">
+          </div>
+          <div class="form-group col-md-1">
+            <label for="file_reload">Reload</label>
+            <input type="button" class="form-control" id="file_reload">
           </div>
           <div class="form-group col-md-6">
             <div class="form-group">
@@ -72,11 +75,16 @@
         <div class="panel-title device-name">HomieDevice</div>
       </div>
       <div class="panel-body device-info">
-          <div id="info_template"><label class="info_label">Version</label><input type="text" readonly class="form-control info_text" placeholder="NA"></div>
+        <div id="info_template"><label class="info_label">Version</label><input type="text" readonly
+            class="form-control info_text" placeholder="NA"></div>
       </div>
       <div class="panel-footer device-ota">
-          <div class="device-ota-status progress-bar progress-bar-striped progress-bar-animated invisible" role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">fd</div>
-          <input type="button" class="form-control update-button" value="Update">
+        <div class="device-ota-status progress-bar progress-bar-striped progress-bar-animated invisible"
+          role="progressbar" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">fd</div>
+        <input type="button" class="form-control update-button" value="Update">        
+        <input type="button" class="form-control getconfig-button" value="Get Config">
+        <input type="button" class="form-control sendconfig-button collapse" value="Send Config">
+        <textarea rows="4" class="form-control config-text  collapse"></textarea>
       </div>
     </div>
 
@@ -99,36 +107,47 @@
 
   <script>
     $("#srv_connect").bind("click", srv_connect);
+    $("#file_path").bind("change", firmwareselected);
+    $("#file_reload").bind("click", firmwareselected);
 
 
-    var fw;
+    //var fw;
+    var fwbin;
     var fw_md5;
 
     var mqtt;
-    var mqtt_reconnect = 2000;
+    var mqtt_reconnect = 10000;
     var basetopic;
 
     var devices = new Map();
     var deviceinfos = new Map();
-    deviceinfos.set("/$fw/version", "FW-Version");
-    deviceinfos.set("/$name", "Name");
-    deviceinfos.set("/$fw/name", "FW-Name");
-    deviceinfos.set("/$state","State");
-    deviceinfos.set("/$implementation/ota/enabled", "OTA-Enabled");
-    deviceinfos.set("/$implementation/ota/status", "OTA-Status");
+    deviceinfos.set("/$fw/version", "fwversion");
+    deviceinfos.set("/$name", "name");
+    deviceinfos.set("/$fw/name", "fwname");
+    deviceinfos.set("/$state", "state");
+    deviceinfos.set("/$implementation/ota/enabled", "otaenabled");
+    deviceinfos.set("/$implementation/ota/status", "otastatus");
+    deviceinfos.set("/$implementation/config", "config");
 
 
-    function getMD5() {
+    var devicelabels = new Map();
+    devicelabels.set("fwname", "FW Name");
+    devicelabels.set("fwversion", "FW Version");
+    devicelabels.set("state", "State");
+    devicelabels.set("otastatus", "OTA Status");
+
+
+    function getMD5(firmware) {
       let md5_field = document.getElementById("fw_md5");
-      let hash = CryptoJS.MD5(CryptoJS.enc.Latin1.parse(fw));
+      let hash = CryptoJS.MD5(CryptoJS.enc.Latin1.parse(firmware));
       fw_md5 = hash.toString(CryptoJS.enc.Hex);
       $(md5_field).val(fw_md5);
     }
 
-    function getFwName() {
+    function getFwName(firmware) {
       let fwNameMBprefix = String.fromCharCode(0xBF, 0x84, 0xE4, 0x13, 0x54);
       let fwNameMBpostfix = String.fromCharCode(0x93, 0x44, 0x6B, 0xA7, 0x75);
-      let fw_namestr = fw.substring(fw.indexOf(fwNameMBprefix) + fwNameMBprefix.length, fw.indexOf(fwNameMBpostfix));
+      let fw_namestr = firmware.substring(firmware.indexOf(fwNameMBprefix) + fwNameMBprefix.length, firmware.indexOf(fwNameMBpostfix));
       $("#fw_name").val(fw_namestr);
       console.log(fw_namestr);
     }
@@ -142,12 +161,23 @@
       reader.addEventListener(
         'load',
         function () {
-          fw = this.result;
-          getMD5();
-          getFwName();
+          //fw = this.result;
+          getMD5(this.result);
+          getFwName(this.result);
         }
       );
-      reader.readAsArrayBuffer(fw_select);
+      reader.readAsBinaryString(fw_select);
+
+
+      let readerbin = new FileReader();
+
+      readerbin.addEventListener(
+        'load',
+        function () {
+          fwbin = this.result;
+        }
+      );
+      readerbin.readAsArrayBuffer(fw_select);
     }
 
     function onConnect() {
@@ -168,12 +198,18 @@
 
     }
 
+    function cleanDevices() {
+      $(".update-button").each(function () {
+        $(this).addClass("invisible");
+      });
+    }
+
     function srv_disconnect() {
-      mqtt.disconnect();
-      console.log("disconnected");
+      console.log("disconnect");
       $("#srv_connect").val("Connect");
       $("#srv_connect").unbind();
       $("#srv_connect").bind("click", srv_connect);
+      mqtt.disconnect();
     }
 
     function srv_connect() {
@@ -191,13 +227,17 @@
     function onConnectionLost(responseObject) {
       if (responseObject.errorCode !== 0) {
         console.log("onConnectionLost:" + responseObject.errorMessage);
+        setTimeout(srv_connect, mqtt_reconnect);
       }
-      timeout(srv_connect,mqtt_reconnect);
+      cleanDevices();
+      $("#srv_connect").val("Connect");
+      $("#srv_connect").unbind();
+      $("#srv_connect").bind("click", srv_connect);
     }
 
-    function onFailure(message){
+    function onFailure(message) {
       console.log("Connection attempt failed: " + message);
-      timeout(srv_connect,mqtt_reconnect);
+      setTimeout(srv_connect, mqtt_reconnect);
     }
 
     function onMessageArrived(message) {
@@ -214,98 +254,118 @@
         devices.set(device_id, device);
       }
       //console.log(devices);
-      if(sub=="/$implementation/ota/status"){
+      if (sub == "/$implementation/ota/status") {
         progressOTA(device_id);
       }
-      else{
+      else {
         updateDevice(device_id);
       }
 
     }
 
     function updateDevice(device_id) {
-      let device=devices.get(device_id);
+      let device = devices.get(device_id);
       let $devicepanel = $("#" + device_id + "_panel");
       if ($devicepanel.length == 0) {
         let $template = $("#homiedevice_template").clone();
-        $template.attr("id",device_id+"_panel");
+        $template.attr("id", device_id + "_panel");
         $template.removeClass("invisible");
-        $template.find(".device-info").text(""); 
+        $template.find(".device-info").text("");
         $template.appendTo($("#deviceslist"));
         $devicepanel = $template;
       }
-      device.forEach(function(val,key){
-        if(key=="Name"){
-        $devicepanel.find(".device-name").text(device.get("Name"));
-      }else{
-        $deviceinfo = $devicepanel.find(".device-info");
-        $infoline = $deviceinfo.find("#"+device_id + key);
-        if($infoline.length==0){
-          console.log("Add line " + key + " to " + device_id);
-          $infoline=$("#info_template").clone();
-          $infoline.attr("id",device_id+key)
-          $infoline.appendTo($deviceinfo);
-        }
-        $infoline.find(".info_label").text(key);
-        $infoline.find(".info_text").val(val);
+      if (device.has("name")) {
+        $devicepanel.find(".device-name").text(device.get("name"));
       }
-      });
-      if(device.has("OTA-Enabled")){
-        if(device.get("OTA-Enabled")=="true"){
-          $devicepanel.find(".update-button").attr("value","Update").unbind().bind("click",function(){updateFw(device_id);});
-        }else{
-          $devicepanel.find(".update-button").unbind().attr("value","OTA disabled");
+      devicelabels.forEach(function (lval, lkey) {
+        $deviceinfo = $devicepanel.find(".device-info");
+        if (device.has(lkey)) {
+          $infoline = $deviceinfo.find("#" + device_id + lkey);
+          if ($infoline.length == 0) {
+            console.log("Add line " + lkey + " to " + device_id);
+            $infoline = $("#info_template").clone();
+            $infoline.attr("id", device_id + lkey)
+            $infoline.appendTo($deviceinfo);
+          }
+          $infoline.find(".info_label").text(lval);
+          $infoline.find(".info_text").val(device.get(lkey));
         }
-      }else{
-        $devicepanel.find(".update-button").unbind().attr("value","OTA not available");
+
+      });
+      $devicepanel.find(".getconfig-button").unbind().bind("click", function () { getConfig(device_id); });
+      if (device.has("otaenabled")) {
+        if (device.get("otaenabled") == "true") {
+          $devicepanel.find(".update-button").attr("value", "Update").unbind().bind("click", function () { updateFw(device_id); });
+        } else {
+          $devicepanel.find(".update-button").unbind().attr("value", "OTA disabled");
+        }
+      } else {
+        $devicepanel.find(".update-button").unbind().attr("value", "OTA not available");
       }
     }
 
-    function updateFw(device_id){
+    function getConfig(device_id){
+      let $devicefooter = $("#" + device_id + "_panel>.device-ota");
+      $devicefooter.find(".sendconfig-button").removeClass("collapse");
+      $devicefooter.find(".sendconfig-button").unbind().bind("click", function(){sendConfig(device_id);});
+      let configjson = JSON.stringify(JSON.parse(devices.get(device_id).get("config")),null,4);
+      $devicefooter.find(".config-text").removeClass("collapse").val(configjson);
+    }
+
+    function sendConfig(device_id){
+      let $devicefooter = $("#" + device_id + "_panel>.device-ota");
+      let configtosend = $devicefooter.find(".config-text").val();
+      let message = new Paho.MQTT.Message(configtosend);
+      message.destinationName = String(basetopic + device_id + "/$implementation/config/set");
+      console.log(message);
+      mqtt.send(message);
+    }
+
+    function updateFw(device_id) {
       console.log("Update " + device_id);
       let $devicefooter = $("#" + device_id + "_panel>.device-ota");
-      $devicefooter.find(".update-button").addClass("invisible");
+      //$devicefooter.find(".update-button").addClass("invisible");
 
-      let message = new Paho.MQTT.Message(btoa(fw));
+      let message = new Paho.MQTT.Message(fwbin);
       message.destinationName = String(basetopic + device_id + "/$implementation/ota/firmware/" + fw_md5);
       $devicefooter.find(".device-ota-status").removeClass("invisible");
       console.log(message);
       mqtt.send(message);
     }
 
-    function progressOTA(device_id){
+    function progressOTA(device_id) {
       let $devicefooter = $("#" + device_id + "_panel>.device-ota");
       let $bar = $devicefooter.find(".device-ota-status");
-      let state = devices.get(device_id).get("OTA-Status");
+      let state = devices.get(device_id).get("otastatus");
       let statecode = state.split(" ")[0];
       let stateinfo = state.split(" ")[1];
       console.log("code: " + statecode + "  info: " + stateinfo);
-      switch(statecode.trim()){
+      switch (statecode.trim()) {
         case "400":
-        $bar.text("Invalid FW");
-        $bar.addClass("progress-bar-danger");
-        $bar.attr("style","");
-        $devicefooter.find(".update-button").removeClass("invisible");
-        break;
+          $bar.text("Invalid FW");
+          $bar.addClass("progress-bar-danger");
+          $bar.attr("style", "");
+          $devicefooter.find(".update-button").removeClass("invisible");
+          break;
 
         case "206":
-        let percent = stateinfo.split("/")[0] / stateinfo.split("/")[1] * 100;
-        $bar.attr("style","width:"+ percent +"%");
-        $bar.addClass("progress-bar-info").removeClass("progress-bar-danger");
-        $bar.text(stateinfo);
-        break;
+          let percent = stateinfo.split("/")[0] / stateinfo.split("/")[1] * 100;
+          $bar.attr("style", "width:" + percent + "%");
+          $bar.addClass("progress-bar-info").removeClass("progress-bar-danger");
+          $bar.text(stateinfo);
+          break;
 
         case "200":
-        $bar.text("Update successful");
-        $bar.addClass("progress-bar-success").removeClass("progress-bar-danger");
-        $bar.attr("style","");
-        $devicefooter.find(".update-button").removeClass("invisible");
-        break;
+          $bar.text("Update successful");
+          $bar.addClass("progress-bar-success").removeClass("progress-bar-danger");
+          $bar.attr("style", "");
+          $devicefooter.find(".update-button").removeClass("invisible");
+          break;
 
         default:
-        $bar.text(state);
-        $devicefooter.find(".update-button").removeClass("invisible");
-        $bar.attr("style","");
+          $bar.text(state);
+          $devicefooter.find(".update-button").removeClass("invisible");
+          $bar.attr("style", "");
 
 
       }
